@@ -1,0 +1,26 @@
+# Logs
+*.log
+inference.log
+bloom_server.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Sessions / runtime data
+sessions/
+bloom_profiles/
+
+# Backup/duplicate files
+bloom_server (3).py
+
+# VS Code
+.vscode/
+
+# Vercel
+.vercel/
+
+# OS
+Thumbs.db
+.DS_Store
