@@ -378,6 +378,69 @@ WHEN YOU DON'T KNOW SOMETHING:
 - Turn your uncertainty into curiosity about THEM, not a dead end
 - NEVER give a generic filler like "That's interesting!" — always engage with what they said specifically"""
 
+def _local_reply(child_msg, profile, recent_bloom_responses=None, is_crisis=False):
+    text = (child_msg or "").strip().rstrip("\\")
+    lower = text.lower()
+    name = profile.get("name") or "friend"
+    interests = profile.get("interests", {}).get("deep", []) or []
+    stims = profile.get("sensory", {}).get("stims", []) or []
+
+    if is_crisis or _is_crisis(text):
+        if "mom" in lower or "dad" in lower or "parent" in lower:
+            lead = "That sounds really hard with your family."
+        else:
+            lead = "That sounds really heavy."
+        return (
+            f"{lead} I am here with you, and I want to understand what happened. "
+            "If things ever feel really overwhelming, you can call 1098 - it is a free helpline just for children, available any time, and they really listen."
+        )
+
+    if re.search(r"\bwho am i\b", lower):
+        detail = f"You are {name}"
+        if interests:
+            detail += f", and I know you like {interests[0]}"
+        return (
+            f"{detail}. I would say you are someone with your own style, your own favorite things, and a mind that notices a lot. "
+            "What feels most like you today?"
+        )
+
+    if "hate my mom" in lower or "mom is angry" in lower or "angry at my mom" in lower:
+        return (
+            "That sounds really upsetting. You are allowed to feel mad, and I want to understand what happened with your mom. "
+            "Do you want to tell me the part that felt worst?"
+        )
+
+    if "train" in lower:
+        return (
+            "Trains are a strong choice. Is this about a real train, a train game, or the train stuff you like building? "
+            "Tell me the coolest part."
+        )
+
+    if "minecraft" in lower or "build" in lower:
+        return (
+            "Ooh, tell me about the build. What did you make, and what part are you most proud of?"
+        )
+
+    if any(term in lower for term in ["help", "sad", "mad", "scared", "lonely", "hurt"]):
+        return (
+            f"That sounds really big, {name}. I am listening. Can you tell me one more part of it?"
+        )
+
+    if stims and _has(text, stims):
+        return f"I hear you. {stim_aff(profile)} What does that feeling do for you?"
+
+    if recent_bloom_responses:
+        return (
+            f"You said: {text}. I do not want to repeat myself, so I am going to stay with your exact words. "
+            "What part matters most to you right now?"
+        )
+
+    interests_text = ", ".join(interests[:3]) if interests else "your favorite things"
+    return (
+        f"You said: {text}. I am curious about that, and I keep thinking about {interests_text}. "
+        "What should we explore next?"
+    )
+
 def _yn(text):
     text=re.sub(r'<think>.*?</think>','',text,flags=re.DOTALL|re.IGNORECASE).strip()
     for line in text.splitlines():
@@ -466,6 +529,15 @@ async def run_pipeline(child_msg, profile, history, bcast,
     else:
         await step("multimodal","fail")
 
+    if not GROQ_KEY:
+        resp = _local_reply(child_msg, profile, recent_bloom_responses=recent_bloom_responses, is_crisis=is_crisis)
+        await step("llm","pass")
+        await step("harm","pass")
+        await step("affirm","pass")
+        await step("stim","pass")
+        await step("tts","pass")
+        return resp, {"is_harmful": False, "is_affirming": True}, time.time()-t0, mm_payload
+
     llm_msg = child_msg
     vctx = _vision.vctx()
     if vctx:
@@ -494,7 +566,8 @@ async def run_pipeline(child_msg, profile, history, bcast,
             )
         except Exception as e:
             await step("llm","fail"); print(f"  LLM err: {e}")
-            return SAFE_FALLBACK,{"is_harmful":False,"is_affirming":True},time.time()-t0,mm_payload
+            resp = _local_reply(child_msg, profile, recent_bloom_responses=recent_bloom_responses, is_crisis=is_crisis)
+            return resp,{"is_harmful":False,"is_affirming":True},time.time()-t0,mm_payload
         await step("llm","pass")
         await step("harm","running")
         verdict=await loop.run_in_executor(None,lambda r=resp,c=child_msg,p=profile:judge(r,c,p))
@@ -510,7 +583,8 @@ async def run_pipeline(child_msg, profile, history, bcast,
         strict=True
 
     await step("stim","pass"); await step("tts","pass")
-    return SAFE_FALLBACK,{"is_harmful":False,"is_affirming":True},time.time()-t0,mm_payload
+    resp = _local_reply(child_msg, profile, recent_bloom_responses=recent_bloom_responses, is_crisis=is_crisis)
+    return resp,{"is_harmful":False,"is_affirming":True},time.time()-t0,mm_payload
 
 async def handle_msg(text, source, ws=None):
     global _busy, _child_session_state

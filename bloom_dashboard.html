@@ -492,16 +492,29 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:12px 2
 
 <script>
 // ── WS URL — reads from ?server= param, localStorage, or defaults to localhost ──
+function _defaultWsUrl(){
+  if(window.location.protocol==='file:') return 'ws://localhost:8765';
+  const host=window.location.hostname||'localhost';
+  const scheme=(window.location.protocol==='https:')?'wss':'ws';
+  return `${scheme}://${host}:8765`;
+}
+function _isLocalWsUrl(url){
+  return /^(ws|wss):\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(url||'');
+}
 function _resolveWsUrl(){
   const p=new URLSearchParams(window.location.search).get('server');
   if(p){localStorage.setItem('bloom_ws_url',p);return p;}
-  return localStorage.getItem('bloom_ws_url')||'ws://localhost:8765';
+  const stored=localStorage.getItem('bloom_ws_url');
+  const def=_defaultWsUrl();
+  if(!stored) return def;
+  if(window.location.protocol!=='file:' && _isLocalWsUrl(stored) && !_isLocalWsUrl(def)) return def;
+  return stored;
 }
 let _wsUrl=_resolveWsUrl();
 
 function applyWsUrl(){
   const inp=document.getElementById('ws-url-input');
-  const val=(inp&&inp.value.trim())||'ws://localhost:8765';
+  const val=(inp&&inp.value.trim())||_defaultWsUrl();
   _wsUrl=val; localStorage.setItem('bloom_ws_url',val);
   initWS();
 }
@@ -509,7 +522,7 @@ function applyWsUrl(){
 // Pre-fill the input with the current URL
 window.addEventListener('DOMContentLoaded',()=>{
   const inp=document.getElementById('ws-url-input');
-  if(inp) inp.value=_wsUrl;
+  if(inp && !inp.value) inp.value=_wsUrl;
 });
 
 // ── WS ───────────────────────────────────────────────────────────────────

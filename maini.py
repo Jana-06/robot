@@ -9,12 +9,14 @@ Usage: python maini.py
 """
 import subprocess, sys, time, os, json
 from urllib.parse import urlparse
+from pathlib import Path
 
 ROOT = os.path.dirname(__file__)
 PY = sys.executable
 TRAINER = os.path.join(ROOT, "bloom_multimodal_trainer.py")
 SERVER = os.path.join(ROOT, "bloom_server.py")
 DASH = os.path.join(ROOT, "bloom_dashboard.html")
+PUBLIC_WS_URL = os.environ.get("BLOOM_WS_URL", "").strip()
 
 MM_URL = "ws://localhost:8766"
 BS_URL = "ws://localhost:8765"
@@ -73,7 +75,11 @@ def main():
     if os.path.exists(DASH):
         try:
             import webbrowser
-            webbrowser.open('file://' + DASH)
+            dashboard_url = Path(DASH).as_uri()
+            if PUBLIC_WS_URL:
+                from urllib.parse import quote
+                dashboard_url += f"?server={quote(PUBLIC_WS_URL, safe=':/?&=@')}"
+            webbrowser.open(dashboard_url)
             print(f"Opened dashboard: {DASH}")
         except Exception as e:
             print(f"Could not open dashboard: {e}")
