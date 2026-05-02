@@ -2,94 +2,103 @@
 """
 Launcher for the BLOOM demo project.
 
-Starts the multimodal inference server and the BLOOM WebSocket server,
-waits for them to become reachable, then opens the dashboard HTML.
+Starts the multimodal inference server (ws://localhost:8766) and the BLOOM
+WebSocket server (ws://localhost:$PORT).  Keeps both alive forever, restarting
+any process that exits unexpectedly.
 
 Usage: python maini.py
 """
-import subprocess, sys, time, os, json
-from urllib.parse import urlparse
-from pathlib import Path
+import os
+import subprocess
+import sys
+import time
 
-ROOT = os.path.dirname(__file__)
+ROOT = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable
 TRAINER = os.path.join(ROOT, "bloom_multimodal_trainer.py")
-SERVER = os.path.join(ROOT, "bloom_server.py")
-DASH = os.path.join(ROOT, "bloom_dashboard.html")
-PUBLIC_WS_URL = os.environ.get("BLOOM_WS_URL", "").strip()
+SERVER  = os.path.join(ROOT, "bloom_server.py")
 
-MM_URL = "ws://localhost:8766"
-BS_URL = "ws://localhost:8765"
+MM_URL  = "ws://localhost:8766"
+BS_PORT = int(os.environ.get("PORT", 8765))
+BS_URL  = f"ws://localhost:{BS_PORT}"
+
 
 def start_process(cmd, name):
-    print(f"Starting: {name}")
-    # On Windows, create a new console so logs are visible separately
-    creationflags = 0
+    print(f"Starting: {name}", flush=True)
     if os.name == "nt":
-        creationflags = subprocess.CREATE_NEW_CONSOLE
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=creationflags, shell=False)
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+    return subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
 
-def probe_ws(url, timeout=20.0):
+
+def probe_ws(url, timeout=30.0):
     import asyncio
     try:
         import websockets
     except Exception:
-        subprocess.run([PY, "-m", "pip", "install", "websockets", "-q"]) ; import websockets
+        subprocess.run([PY, "-m", "pip", "install", "websockets", "-q"])
+        import websockets
 
     async def _check():
         try:
-            async with websockets.connect(url, max_size=10*1024*1024):
+            async with websockets.connect(url, max_size=10 * 1024 * 1024):
                 return True
         except Exception:
             return False
 
-    t0=time.time()
-    while time.time()-t0 < timeout:
+    t0 = time.time()
+    while time.time() - t0 < timeout:
         try:
             ok = asyncio.run(_check())
         except Exception:
             ok = False
-        if ok: return True
+        if ok:
+            return True
         time.sleep(0.6)
     return False
 
+
 def main():
-    # Ensure model file exists (trainer uses it when serving)
     model_file = os.path.join(ROOT, "bloom_multimodal_model.json")
     if not os.path.exists(model_file):
-        print("Warning: bloom_multimodal_model.json not found — trainer will generate or run in empty-mode.")
+        print(
+            "Warning: bloom_multimodal_model.json not found — "
+            "trainer will run in empty-mode.",
+            flush=True,
+        )
 
     trainer_cmd = [PY, TRAINER, "--serve", "--model-path", "bloom_multimodal_model.json"]
-    server_cmd = [PY, SERVER, "--child", "demo"]
+    server_cmd  = [PY, SERVER,  "--child", "demo"]
 
-    p_trainer = start_process(trainer_cmd, "multimodal trainer")
-    p_server = start_process(server_cmd, "bloom server")
+    p_trainer = start_process(trainer_cmd, "multimodal trainer  (ws://localhost:8766 internal)")
+    p_server  = start_process(server_cmd,  f"bloom server        (ws://localhost:{BS_PORT} public)")
 
-    print("Probing services (this may take a few seconds)...")
+    print("Probing services — this may take up to 30 s on first start…", flush=True)
     mm_ok = probe_ws(MM_URL, timeout=30)
     bs_ok = probe_ws(BS_URL, timeout=30)
+    print(f"Multimodal server reachable : {mm_ok}", flush=True)
+    print(f"BLOOM server reachable      : {bs_ok}", flush=True)
+    print(f"Trainer PID : {p_trainer.pid}", flush=True)
+    print(f"Server PID  : {p_server.pid}",  flush=True)
+    print("Both servers running. Keeping alive — press Ctrl-C to stop.", flush=True)
 
-    print(f"Multimodal server reachable: {mm_ok}")
-    print(f"BLOOM server reachable: {bs_ok}")
+    # Keep-alive loop: restart any child that exits unexpectedly.
+    while True:
+        time.sleep(5)
+        if p_trainer.poll() is not None:
+            print("Trainer exited unexpectedly; restarting…", flush=True)
+            p_trainer = start_process(trainer_cmd, "multimodal trainer (restart)")
+        if p_server.poll() is not None:
+            print("Server exited unexpectedly; restarting…", flush=True)
+            p_server = start_process(server_cmd, "bloom server (restart)")
 
-    if os.path.exists(DASH):
-        try:
-            import webbrowser
-            dashboard_url = Path(DASH).as_uri()
-            if PUBLIC_WS_URL:
-                from urllib.parse import quote
-                dashboard_url += f"?server={quote(PUBLIC_WS_URL, safe=':/?&=@')}"
-            webbrowser.open(dashboard_url)
-            print(f"Opened dashboard: {DASH}")
-        except Exception as e:
-            print(f"Could not open dashboard: {e}")
-    else:
-        print("Dashboard HTML not found; open bloom_dashboard.html manually.")
 
-    print("Launcher finished. Server logs are running in their consoles.")
-    print("If you want to stop both servers, kill the PIDs printed below.")
-    print("Trainer PID:", p_trainer.pid)
-    print("Server PID:", p_server.pid)
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Launcher stopped.", flush=True)

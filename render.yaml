@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: bloom-backend
+    runtime: docker
+    plan: free
+    # Render automatically injects PORT (typically 10000).
+    # bloom_server.py reads os.environ.get("PORT", 8765) so it binds to
+    # whatever port Render assigns and Render routes traffic to it.
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false   # you enter this manually in the Render dashboard

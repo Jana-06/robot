@@ -63,7 +63,7 @@ RATE_RETRIES    = 3
 PROFILES_DIR    = Path("bloom_profiles")
 CHILD_SESSIONS_DIR = Path("sessions")
 WS_HOST         = "0.0.0.0"
-WS_PORT         = 8765
+WS_PORT         = int(os.environ.get("PORT", 8765))
 JPEG_QUALITY    = 65
 ACTION_CTX_WIN  = 2.5
 CLAP_COOLDOWN   = 1.2
@@ -721,8 +721,7 @@ async def handle_msg(text, source, ws=None):
             "most_common_context": common_ctx,
             "personalization_level": _personalization_level,
         })
-        # TTS is handled by the browser via browserSpeak() in bloom_dashboard.html
-        # speak(resp)  # disabled to prevent dual-TTS overlap
+        # speak(resp)  # browser handles TTS
     finally:
         _busy = False
 
