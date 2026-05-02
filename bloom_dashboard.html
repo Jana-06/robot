@@ -532,22 +532,95 @@ let frameTimer=null, lastFrameT=0, fpsCnt=0, fpsT=0;
 let mediaRec=null, recChunks=[], toggling=false, audioStream=null;
 let signalTimeline=[];
 let responseHistory=[];
+let _localMode=false;
+let _wsRetryCount=0;
+let _wsRetryTimer=null;
 let DEMOS={trains:"the blue train goes SO fast!! it can go through the mountain tunnel!!",stim:"i keep flapping my hands i cant stop",upset:"school was really loud today",mc:"I made a piston door with a pressure plate!! it has a hidden reset lever behind the wall!!",quiet:"..."};
 
+function _isVercelHost(){ return /vercel\.app$/i.test(window.location.hostname||""); }
+
+function _localReply(text){
+  const lower=(text||"").toLowerCase().trim().replace(/\\+$/g,"");
+  const name=(profile&&profile.name)||"friend";
+  const interests=((profile&&profile.interests&&profile.interests.deep)||[]).slice();
+  const stims=((profile&&profile.sensory&&profile.sensory.stims)||[]).slice();
+
+  if(/\bwho am i\b/.test(lower)){
+    const firstInterest=interests[0]||"your favorite things";
+    return `You are ${name}, and I know you like ${firstInterest}. I think you are someone with your own style and a lot of interesting ideas. What feels most like you today?`;
+  }
+  if(lower.includes("hate my mom") || lower.includes("mom is angry") || lower.includes("angry at my mom")){
+    return "That sounds really upsetting. You are allowed to feel mad, and I want to understand what happened with your mom. Do you want to tell me the part that felt worst?";
+  }
+  if(lower.includes("train")){
+    return "Trains are a strong choice. Is this about a real train, a train game, or the train stuff you like building? Tell me the coolest part.";
+  }
+  if(lower.includes("minecraft") || lower.includes("build")){
+    return "Ooh, tell me about the build. What did you make, and what part are you most proud of?";
+  }
+  if(lower.includes("help") || lower.includes("sad") || lower.includes("mad") || lower.includes("scared") || lower.includes("lonely") || lower.includes("hurt")){
+    return `That sounds really big, ${name}. I am listening. Can you tell me one more part of it?`;
+  }
+  if(lower.includes("i hate mom") || lower.includes("mom hurt") || lower.includes("i hate my mom") || lower.includes("i want to die") || lower.includes("kill")){
+    return "That sounds really hard with your family. I am here with you, and I want to understand what happened. If things ever feel really overwhelming, you can call 1098 - it is a free helpline just for children, available any time, and they really listen.";
+  }
+  if(stims.some(s=>lower.includes(String(s).toLowerCase()))){
+    return `I hear you, and that makes sense. I think stimming can help your body feel safer and more regulated. What does it do for you?`;
+  }
+  const interestText=interests.slice(0,3).join(", ") || "your favorite things";
+  return `You said: ${text}. I am curious about that, and I keep thinking about ${interestText}. What should we explore next?`;
+}
+
+function enableLocalMode(reason){
+  if(_localMode) return;
+  _localMode=true;
+  if(_wsRetryTimer){ clearTimeout(_wsRetryTimer); _wsRetryTimer=null; }
+  setWS("local");
+  const overlay=document.getElementById("cov");
+  if(overlay) overlay.classList.remove("h");
+  const lbl=document.getElementById("wslbl");
+  if(lbl) lbl.textContent=reason ? `Local demo · ${reason}` : "Local demo mode";
+  const hint=document.getElementById("chat-ttl");
+  if(hint && reason) hint.title=reason;
+}
+
+function sendLocalChat(text, source="text"){
+  const who=profile?.name||"Child";
+  addMsg("child", source==="voice" ? "🎤" : "⌨", who, text);
+  resetGF();
+  showTy("thinking…");
+  setTimeout(()=>{
+    hideTy();
+    const reply=_localReply(text);
+    addBloom(reply, [{c:"fp", l:"✓ HARM"},{c:"fp", l:"✓ AFFIRM"}], false, 0);
+  }, 550);
+}
+
 function initWS(){
+  if(_localMode) return;
   setWS("connecting");
   try{ ws=new WebSocket(_wsUrl); }catch(e){ setWS("err"); return; }
-  ws.onopen=()=>{ setWS("on"); document.getElementById("cov").classList.add("h"); };
-  ws.onclose=()=>{ setWS("off"); document.getElementById("cov").classList.remove("h"); setTimeout(initWS,3000); };
+  ws.onopen=()=>{ _wsRetryCount=0; setWS("on"); document.getElementById("cov").classList.add("h"); };
+  ws.onclose=()=>{
+    setWS("off");
+    document.getElementById("cov").classList.remove("h");
+    if(_localMode) return;
+    _wsRetryCount += 1;
+    if(_wsRetryCount >= 3 || _isVercelHost()) {
+      enableLocalMode("backend unavailable");
+      return;
+    }
+    _wsRetryTimer = setTimeout(initWS,3000);
+  };
   ws.onerror=()=>setWS("err");
   ws.onmessage=e=>{ try{ route(JSON.parse(e.data)); }catch(x){ console.warn(x); } };
 }
 function setWS(s){
   const d=document.getElementById("wsd"),l=document.getElementById("wslbl");
-  d.className="ws-dot"+(s==="on"?" on":s==="err"?" err":"");
-  l.textContent={on:"Live · ws:8765",off:"Reconnecting…",connecting:"Connecting…",err:"Error"}[s]||s;
+  d.className="ws-dot"+(s==="on"?" on":s==="err"?" err":s==="local"?" on":"");
+  l.textContent={on:"Live · ws:8765",off:"Reconnecting…",connecting:"Connecting…",err:"Error",local:"Local demo"}[s]||s;
 }
-function send(obj){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(obj)); }
+function send(obj){ if(ws&&ws.readyState===1){ ws.send(JSON.stringify(obj)); return true; } return false; }
 
 // ── ROUTER ────────────────────────────────────────────────────────────────
 function route(m){
@@ -782,6 +855,8 @@ function hideTy(){ document.getElementById("ty").classList.remove("show"); }
 function sendTxt(){
   const el=document.getElementById("cinput"); const t=el.value.trim(); if(!t)return;
   el.value=""; ar(el); send({type:"text_msg",text:t});
+  if(!_localMode && !(ws&&ws.readyState===1)) sendLocalChat(t,"text");
+  if(_localMode) sendLocalChat(t,"text");
 }
 function demo(k){ const t=DEMOS[k]; if(t){ document.getElementById("cinput").value=t; sendTxt(); } }
 function hkey(e){ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendTxt();} }
