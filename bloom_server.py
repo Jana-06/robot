@@ -866,6 +866,8 @@ class Vision:
         self.eye_gaze = "unknown"; self.face_gesture = "unknown"
         self.body_language = "unknown"; self.spinning_type = "none"
         self._spin_streak: int = 0
+        self._stillness_frames: int = 0
+        self._vel_positions: deque = deque(maxlen=5)
         self._dh = deque(maxlen=15); self._ch = deque(maxlen=25)
         self._clap_armed = False; self._pd = None; self._pc = None
         self._emotion_history: deque = deque(maxlen=8)
@@ -1026,30 +1028,57 @@ class Vision:
                 action = "clap"; d = (rmax-dist)/max(1,rmax); s = max(0,cs)/max(1,st*2.2)
                 conf = min(1.0, 0.45+d*0.9+s*0.6); self._clap_armed = False; self._dh.clear()
             self._pd = dist
+            self._vel_positions.append((x1, y1))
         elif len(centers) == 1:
             cx, cy = centers[0]; self._ch.append((cx, cy, now))
             if self._pc:
                 px, py = self._pc; spd = math.hypot(cx-px, cy-py)
                 if spd > 20 and (now - self.last_act) > 0.5: action = "hand_activity"; conf = min(1.0, spd/70)
             self._pc = (cx, cy)
+            self._vel_positions.append((cx, cy))
             if len(self._ch) >= 20:
                 pts = [(p[0], p[1]) for p in self._ch]
                 angles = [math.atan2(pts[i+1][1]-pts[i][1], pts[i+1][0]-pts[i][0]) for i in range(len(pts)-1)]
-                self.spin = sum(abs(angles[i+1]-angles[i]) for i in range(len(angles)-1)) > math.pi * 4.5
+                # Raised threshold: requires larger arc before flagging spin
+                self.spin = sum(abs(angles[i+1]-angles[i]) for i in range(len(angles)-1)) > math.pi * 5.0
+            else:
+                self.spin = False
         else:
             self._pc = None; self._pd = None; self._dh.clear(); self.spin = False
+
+        # Stillness detection: if average displacement < 3 px for 8 frames → hard reset
+        if len(self._vel_positions) >= 2:
+            pts = list(self._vel_positions)
+            avg_disp = sum(math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1])
+                          for i in range(1, len(pts))) / (len(pts) - 1)
+            if avg_disp < 3.0:
+                self._stillness_frames += 1
+            else:
+                self._stillness_frames = 0
+        else:
+            self._stillness_frames = 0
+
+        if self._stillness_frames >= 8:
+            self.spin = False
+            self._spin_streak = 0
+            self._ch.clear()
+
         if action != "none": self.action = action; self.conf = conf; self.last_act = now
         elif (now - self.last_act) > ACTION_CTX_WIN: self.action = "none"; self.conf = 0.0
 
     def _refresh_visual_features(self):
         _emo_map = {"happy":"happy","focused":"focused","neutral":"neutral","uncertain":"uncertain","unknown":"unknown"}
         self.face_gesture = _emo_map.get(self.emotion, "neutral") if self.face else "unknown"
-        # Require 3 consecutive spin-detected frames before reporting spinning (hysteresis)
+        # Require 4 consecutive spin-detected frames before reporting spinning (hysteresis)
         if self.spin:
             self._spin_streak += 1
         else:
             self._spin_streak = 0
-        if self._spin_streak >= 3:
+        # Hard stillness override: person stood still → clear all stim state
+        if self._stillness_frames >= 8:
+            self.body_language = "calm"; self.spinning_type = "none"
+            return
+        if self._spin_streak >= 4:
             self.body_language = "spinning"; self.spinning_type = "spinning"
         elif self.action == "clap":
             self.body_language = "active"; self.spinning_type = "none"

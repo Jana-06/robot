@@ -62,7 +62,30 @@ def probe_ws(url, timeout=30.0):
     return False
 
 
+def ensure_stim_model():
+    stim_model = os.path.join(ROOT, "bloom_stim_model.json")
+    if os.path.exists(stim_model):
+        return
+    print("Training stim model... (first time only, ~30-60 seconds)", flush=True)
+    try:
+        result = subprocess.run(
+            [PY, TRAINER, "--train-stim", "--stim-model-path", stim_model],
+            timeout=120,
+            check=False,
+        )
+        if result.returncode == 0:
+            print("Stim model training complete.", flush=True)
+        else:
+            print("Stim model training exited with errors — continuing without it.", flush=True)
+    except subprocess.TimeoutExpired:
+        print("Stim model training timed out — continuing without it.", flush=True)
+    except Exception as e:
+        print(f"Stim model training failed: {e} — continuing without it.", flush=True)
+
+
 def main():
+    ensure_stim_model()
+
     model_file = os.path.join(ROOT, "bloom_multimodal_model.json")
     if not os.path.exists(model_file):
         print(

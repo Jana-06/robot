@@ -314,20 +314,327 @@ class EngagementPredictor:
         return "stable"
 
 
+def generate_stim_training_data() -> Tuple[np.ndarray, np.ndarray]:
+    """Generate synthetic labeled sequences for stim classification (no external data needed)."""
+    samples: List[List[List[float]]] = []
+    labels: List[int] = []
+
+    rng = np.random.default_rng(42)
+
+    # ── STIM sequences (label=1) ──────────────────────────────────────────
+    for _ in range(500):
+        sequence = []
+        for frame in range(30):
+            angle = math.sin(frame * 0.8) * math.pi
+            velocity = abs(math.cos(frame * 0.8)) * 15.0 + rng.uniform(0, 3)
+            repetitions = float(frame // 4)
+            is_moving = 1.0
+            sequence.append([angle, velocity, repetitions, is_moving])
+        samples.append(sequence)
+        labels.append(1)
+
+    # Body-rocking variant
+    for _ in range(250):
+        sequence = []
+        for frame in range(30):
+            angle = math.sin(frame * 0.5) * 0.6 + rng.uniform(-0.1, 0.1)
+            velocity = abs(math.sin(frame * 0.5)) * 8.0 + rng.uniform(0, 2)
+            repetitions = float(frame // 6)
+            is_moving = 1.0
+            sequence.append([angle, velocity, repetitions, is_moving])
+        samples.append(sequence)
+        labels.append(1)
+
+    # Finger-flicking variant (fast small movements)
+    for _ in range(250):
+        sequence = []
+        for frame in range(30):
+            angle = rng.uniform(-0.3, 0.3)
+            velocity = rng.uniform(10, 25)
+            repetitions = float(frame // 3)
+            is_moving = 1.0
+            sequence.append([angle, velocity, repetitions, is_moving])
+        samples.append(sequence)
+        labels.append(1)
+
+    # ── NON-STIM sequences (label=0) ─────────────────────────────────────
+    for _ in range(500):
+        sequence = []
+        for frame in range(30):
+            if frame < 8:
+                angle = frame * 0.3
+                velocity = float(frame * 2.0)
+            else:
+                angle = 0.0
+                velocity = max(0.0, 10.0 - (frame - 8) * 1.5)
+            repetitions = 0.0
+            is_moving = 1.0 if frame < 10 else 0.0
+            sequence.append([angle, velocity, repetitions, is_moving])
+        samples.append(sequence)
+        labels.append(0)
+
+    # Idle/still variant
+    for _ in range(250):
+        sequence = []
+        for frame in range(30):
+            angle = rng.uniform(-0.05, 0.05)
+            velocity = rng.uniform(0, 2)
+            repetitions = 0.0
+            is_moving = 0.0
+            sequence.append([angle, velocity, repetitions, is_moving])
+        samples.append(sequence)
+        labels.append(0)
+
+    # Single-wave variant
+    for _ in range(250):
+        sequence = []
+        peak = rng.integers(4, 10)
+        for frame in range(30):
+            if frame <= peak:
+                angle = frame * 0.25
+                velocity = float(frame * 3.0)
+            else:
+                angle = 0.0
+                velocity = max(0.0, float(peak * 3.0) - (frame - peak) * 2.0)
+            repetitions = 0.0
+            is_moving = float(frame < peak + 5)
+            sequence.append([angle, velocity, repetitions, is_moving])
+        samples.append(sequence)
+        labels.append(0)
+
+    return np.array(samples, dtype=np.float32), np.array(labels, dtype=np.float32)
+
+
+class StimRNN:
+    """Lightweight pure-numpy RNN for stim classification. Trains in < 60 s on CPU."""
+
+    def __init__(self, input_size: int = 4, hidden_size: int = 24, output_size: int = 1):
+        scale_x = np.sqrt(2.0 / input_size)
+        scale_h = np.sqrt(2.0 / hidden_size)
+        self.Wx = np.random.randn(input_size, hidden_size).astype(np.float32) * scale_x
+        self.Wh = np.random.randn(hidden_size, hidden_size).astype(np.float32) * scale_h
+        self.bh = np.zeros(hidden_size, dtype=np.float32)
+        self.Wy = np.random.randn(hidden_size, output_size).astype(np.float32) * scale_h
+        self.by = np.zeros(output_size, dtype=np.float32)
+        # Adam state
+        self._t = 0
+        self._m = {k: np.zeros_like(v) for k, v in self._params().items()}
+        self._v = {k: np.zeros_like(v) for k, v in self._params().items()}
+
+    def _params(self) -> dict:
+        return {"Wx": self.Wx, "Wh": self.Wh, "bh": self.bh, "Wy": self.Wy, "by": self.by}
+
+    @staticmethod
+    def _sigmoid(x: np.ndarray) -> np.ndarray:
+        return 1.0 / (1.0 + np.exp(-np.clip(x, -15.0, 15.0)))
+
+    def forward(self, sequence: np.ndarray) -> float:
+        """sequence: (T, input_size) → probability 0-1"""
+        h = np.zeros(self.Wh.shape[0], dtype=np.float32)
+        for x in sequence:
+            h = np.tanh(x @ self.Wx + h @ self.Wh + self.bh)
+        return float(self._sigmoid(h @ self.Wy + self.by)[0])
+
+    def _forward_with_states(self, seq: np.ndarray):
+        T = len(seq)
+        hs = [np.zeros(self.bh.shape, dtype=np.float32)]
+        for t in range(T):
+            hs.append(np.tanh(seq[t] @ self.Wx + hs[-1] @ self.Wh + self.bh))
+        pre = hs[-1] @ self.Wy + self.by
+        out = self._sigmoid(pre)
+        return hs, out
+
+    def _backward(self, seq: np.ndarray, y: float):
+        hs, out = self._forward_with_states(seq)
+        eps = 1e-7
+        loss = -(y * np.log(out + eps) + (1 - y) * np.log(1 - out + eps))
+
+        d_pre = (out - y)  # shape (1,)
+        dWy = hs[-1].reshape(-1, 1) * d_pre
+        dby = d_pre.copy()
+        dh = (self.Wy * d_pre).reshape(-1)  # (hidden,)
+
+        dWx = np.zeros_like(self.Wx)
+        dWh = np.zeros_like(self.Wh)
+        dbh = np.zeros_like(self.bh)
+
+        for t in range(len(seq) - 1, -1, -1):
+            dtanh = (1.0 - hs[t + 1] ** 2) * dh
+            dWx += np.outer(seq[t], dtanh)
+            dWh += np.outer(hs[t], dtanh)
+            dbh += dtanh
+            dh = self.Wh @ dtanh
+
+        # Clip gradients
+        for g in (dWx, dWh, dbh, dWy, dby):
+            np.clip(g, -5.0, 5.0, out=g)
+
+        return {"Wx": dWx, "Wh": dWh, "bh": dbh, "Wy": dWy, "by": dby}, float(loss[0])
+
+    def _adam_update(self, grads: dict, lr: float = 0.002, beta1: float = 0.9,
+                     beta2: float = 0.999, eps: float = 1e-8) -> None:
+        self._t += 1
+        for k in grads:
+            self._m[k] = beta1 * self._m[k] + (1 - beta1) * grads[k]
+            self._v[k] = beta2 * self._v[k] + (1 - beta2) * grads[k] ** 2
+            m_hat = self._m[k] / (1 - beta1 ** self._t)
+            v_hat = self._v[k] / (1 - beta2 ** self._t)
+            self._params()[k] -= lr * m_hat / (np.sqrt(v_hat) + eps)
+
+    def save(self, path: str) -> None:
+        state = {k: v.tolist() for k, v in self._params().items()}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        LOGGER.info("StimRNN saved → %s", path)
+
+    @classmethod
+    def load(cls, path: str) -> "StimRNN":
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+        obj = cls.__new__(cls)
+        obj.Wx = np.array(state["Wx"], dtype=np.float32)
+        obj.Wh = np.array(state["Wh"], dtype=np.float32)
+        obj.bh = np.array(state["bh"], dtype=np.float32)
+        obj.Wy = np.array(state["Wy"], dtype=np.float32)
+        obj.by = np.array(state["by"], dtype=np.float32)
+        obj._t = 0
+        obj._m = {k: np.zeros_like(v) for k, v in obj._params().items()}
+        obj._v = {k: np.zeros_like(v) for k, v in obj._params().items()}
+        return obj
+
+
+def train_stim_model(model_path: str = "bloom_stim_model.json") -> None:
+    """Train a pure-numpy stim classifier and save weights. No pytorch/tensorflow needed."""
+    LOGGER.info("Generating synthetic stim training data…")
+    sequences, labels = generate_stim_training_data()
+    N = len(sequences)
+    LOGGER.info("Training StimRNN on %d samples (T=30, features=4)…", N)
+
+    np.random.seed(0)
+    model = StimRNN(input_size=4, hidden_size=24, output_size=1)
+
+    epochs = 12
+    batch_size = 32
+    t0 = time.time()
+
+    for epoch in range(epochs):
+        idx = np.random.permutation(N)
+        total_loss = 0.0
+        correct = 0
+
+        for start in range(0, N, batch_size):
+            batch_idx = idx[start:start + batch_size]
+            batch_grads = {k: np.zeros_like(v) for k, v in model._params().items()}
+            batch_loss = 0.0
+
+            for i in batch_idx:
+                grads, loss = model._backward(sequences[i], float(labels[i]))
+                for k in batch_grads:
+                    batch_grads[k] += grads[k] / len(batch_idx)
+                batch_loss += loss / len(batch_idx)
+
+            model._adam_update(batch_grads, lr=0.002)
+            total_loss += batch_loss
+
+        # Accuracy on full dataset
+        for i in range(N):
+            pred = model.forward(sequences[i])
+            correct += int((pred >= 0.5) == bool(labels[i]))
+
+        acc = correct / N * 100
+        LOGGER.info("Epoch %d/%d  loss=%.4f  acc=%.1f%%  (%.1fs)",
+                    epoch + 1, epochs, total_loss / (N / batch_size), acc, time.time() - t0)
+
+        if time.time() - t0 > 55:
+            LOGGER.warning("Stopping early to stay under 60 s budget")
+            break
+
+    model.save(model_path)
+    LOGGER.info("Stim model training complete in %.1fs → %s", time.time() - t0, model_path)
+
+
 class StimPatternClassifier:
-    def __init__(self, window_size: int = 5):
+    COOLDOWN_FRAMES = 10  # frames to wait after stim ends before re-firing
+    ONSET_MIN_FRAMES = 3   # min spinning frames before onset_stim fires
+    SUSTAINED_MIN_FRAMES = 6  # min spinning frames before sustained_stim fires
+
+    def __init__(self, window_size: int = 10):
         self.body_window = deque(maxlen=window_size)
         self.prev_phase = "none"
+        self._cooldown_remaining = 0
+        self._spinning_frames = 0
+        # Load trained model if available
+        self._rnn: Optional["StimRNN"] = None
+        _model_path = Path("bloom_stim_model.json")
+        if _model_path.exists():
+            try:
+                self._rnn = StimRNN.load(str(_model_path))
+                LOGGER.info("Loaded stim RNN model from %s", _model_path)
+            except Exception as ex:
+                LOGGER.warning("Could not load stim model: %s", ex)
+        self._feature_buf: deque = deque(maxlen=30)
+
+    def _body_to_features(self, body_language: str) -> List[float]:
+        spinning_count = sum(1 for x in self.body_window if x == "spinning")
+        feature_map = {
+            "spinning": [math.pi * 1.5, 20.0, float(spinning_count), 1.0],
+            "active":   [0.5, 10.0, 0.0, 1.0],
+            "agitated": [1.0, 15.0, float(spinning_count), 1.0],
+            "calm":     [0.0, 1.0, 0.0, 0.0],
+            "unknown":  [0.0, 0.5, 0.0, 0.0],
+        }
+        return feature_map.get(body_language, [0.0, 1.0, 0.0, 0.0])
 
     def update(self, body_language: str) -> str:
         self.body_window.append(body_language)
+        self._feature_buf.append(self._body_to_features(body_language))
         win = list(self.body_window)
+
+        # Cooldown: don't fire again immediately after stim ends
+        if self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+            if body_language == "spinning":
+                self._spinning_frames += 1
+            else:
+                self._spinning_frames = 0
+            return "none"
+
+        if body_language == "spinning":
+            self._spinning_frames += 1
+        else:
+            # Transitioning away from spinning → start cooldown
+            if self._spinning_frames > 0:
+                self._cooldown_remaining = self.COOLDOWN_FRAMES
+            self._spinning_frames = 0
+
+        # Use RNN model if loaded and buffer is full
+        if self._rnn is not None and len(self._feature_buf) == 30:
+            import numpy as _np
+            seq = _np.array(list(self._feature_buf), dtype=np.float32)
+            prob = self._rnn.forward(seq)
+            if prob < 0.45:
+                if self.prev_phase in ("onset_stim", "sustained_stim"):
+                    self.prev_phase = "post_stim"
+                    return "post_stim"
+                return "none"
+            # Stim detected by model — apply frame minimums
+            if self._spinning_frames >= self.SUSTAINED_MIN_FRAMES:
+                self.prev_phase = "sustained_stim"
+                return "sustained_stim"
+            if self._spinning_frames >= self.ONSET_MIN_FRAMES:
+                self.prev_phase = "onset_stim"
+                return "onset_stim"
+            return "none"
+
+        # Rule-based fallback
         spinning_count = sum(1 for x in win if x == "spinning")
 
-        if len(win) >= 2 and win[-2] != "spinning" and win[-1] == "spinning":
+        if (len(win) >= 2 and win[-2] != "spinning" and win[-1] == "spinning"
+                and self._spinning_frames >= self.ONSET_MIN_FRAMES):
             self.prev_phase = "onset_stim"
             return self.prev_phase
-        if spinning_count >= 3 and win[-1] == "spinning":
+        if (spinning_count >= 3 and win[-1] == "spinning"
+                and self._spinning_frames >= self.SUSTAINED_MIN_FRAMES):
             self.prev_phase = "sustained_stim"
             return self.prev_phase
         if len(win) >= 2 and win[-2] == "spinning" and win[-1] != "spinning":
@@ -622,11 +929,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="BLOOM Multimodal Trainer")
     parser.add_argument("--dataset-root", default=None, help="Path to dataset root")
     parser.add_argument("--train", action="store_true", help="Generate and train on synthetic data")
+    parser.add_argument("--train-stim", action="store_true", help="Train the pure-numpy stim RNN model")
     parser.add_argument("--serve", action="store_true", help="Start inference server")
     parser.add_argument("--retrain", action="store_true", help="Re-rank policy from accumulated rewards")
     parser.add_argument("--model-path", default="bloom_multimodal_model.json", help="Model save/load path")
+    parser.add_argument("--stim-model-path", default="bloom_stim_model.json", help="Stim model save path")
     parser.add_argument("--port", type=int, default=8766, help="Inference server port")
     args = parser.parse_args()
+
+    if args.train_stim:
+        train_stim_model(args.stim_model_path)
+        return
 
     if args.train:
         if not args.dataset_root:
