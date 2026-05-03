@@ -1199,8 +1199,8 @@ const _NUM_K=[];
 class RobotFace {
   constructor(container) {
     // Accept a div container; Three.js creates its own canvas inside
-    this.W = container.offsetWidth  || 240;
-    this.H = container.offsetHeight || 290;
+    this.W = container.offsetWidth  || parseInt(container.style.width)  || 240;
+    this.H = container.offsetHeight || parseInt(container.style.height) || 290;
     if (typeof THREE === 'undefined') {
       container.innerHTML = '<div style="color:#A98FCC;font-size:11px;padding:16px;text-align:center;line-height:1.6">Loading 3D robot…</div>';
       return;
@@ -1333,7 +1333,6 @@ class RobotFace {
       const eg = new THREE.Group();
       eg.position.set(ex,0.23,0.43); this._head.add(eg);
 
-      eg.add(Object.assign(new THREE.Mesh(new THREE.CircleGeometry(0.2,32), this._bm(0x040210)),{position:{set:()=>{}}}));
       const sock=new THREE.Mesh(new THREE.CircleGeometry(0.2,32),this._bm(0x040210)); sock.position.z=0.001; eg.add(sock);
       const iris=new THREE.Mesh(new THREE.CircleGeometry(0.155,32),this._bm(C.accent)); iris.position.z=0.002; eg.add(iris);
       const pupil=new THREE.Mesh(new THREE.CircleGeometry(0.072,20),this._bm(0x030110)); pupil.position.z=0.003; eg.add(pupil);
@@ -1381,7 +1380,6 @@ class RobotFace {
 
   _makeArm(C, bodyM, lightM) {
     const g=new THREE.Group();
-    g.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(0.26,0.55,0.26),bodyM),{position:{y:-0.275,set:(x,y,z)=>{}}}));
     const upper=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.55,0.26),bodyM); upper.position.y=-0.275; g.add(upper);
     const elbow=new THREE.Mesh(new THREE.SphereGeometry(0.115,12,12),lightM); elbow.position.y=-0.55; g.add(elbow);
     const fg=new THREE.Group(); fg.position.y=-0.55; g.add(fg);
