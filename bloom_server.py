@@ -106,6 +106,123 @@ CRISIS_PATTERNS: list = [
     "can't take it anymore", "cant take it anymore",
 ]
 
+# ── VULNERABILITY SIGNAL LISTS ────────────────────────────────────────────
+SELF_HARM = [
+    "want to die", "kill myself", "hurt myself", "cut myself",
+    "don't want to live", "wish i was dead", "end my life",
+    "make it stop", "can't take it anymore", "nobody cares",
+    "want to disappear", "hate myself", "i'm worthless",
+]
+
+ABUSE = [
+    "someone hurts me", "they hit me", "scared at home",
+    "don't feel safe", "someone touches me", "bad touch",
+    "hurts me when", "please help me",
+    "they hurt me", "i'm being hurt",
+]
+
+SEVERE_DISTRESS = [
+    "i want to kill", "want to hurt", "going to hurt",
+    "no one loves me", "everyone hates me", "run away",
+    "i hate everything", "make everyone stop",
+]
+
+HELPLINES = {
+    "self_harm": {
+        "name": "iCall",
+        "number": "9152987821",
+        "hours": "Mon-Sat 8am-10pm",
+        "text": "iCall counsellors are trained to help",
+    },
+    "abuse": {
+        "name": "CHILDLINE India",
+        "number": "1098",
+        "hours": "24/7 free",
+        "text": "CHILDLINE is here for you any time",
+    },
+    "distress": {
+        "name": "Vandrevala Foundation",
+        "number": "1860-2662-345",
+        "hours": "24/7",
+        "text": "You can talk to someone right now",
+    },
+    "default": {
+        "name": "CHILDLINE India",
+        "number": "1098",
+        "hours": "24/7 free",
+        "text": "CHILDLINE is always here to help",
+    },
+}
+
+
+def detect_vulnerability(text: str) -> dict:
+    text_lower = text.lower()
+    matched_category = None
+    matched_phrase = None
+
+    for phrase in SELF_HARM:
+        if phrase in text_lower:
+            matched_category = "self_harm"
+            matched_phrase = phrase
+            break
+
+    if not matched_category:
+        for phrase in ABUSE:
+            if phrase in text_lower:
+                matched_category = "abuse"
+                matched_phrase = phrase
+                break
+
+    if not matched_category:
+        for phrase in SEVERE_DISTRESS:
+            if phrase in text_lower:
+                matched_category = "distress"
+                matched_phrase = phrase
+                break
+
+    return {
+        "vulnerable": matched_category is not None,
+        "category": matched_category,
+        "phrase": matched_phrase,
+    }
+
+
+def build_helpline_response(vuln: dict, profile: dict) -> str:
+    name = profile.get("name", "friend")
+    helpline = HELPLINES.get(vuln["category"], HELPLINES["default"])
+
+    if vuln["category"] == "self_harm":
+        return (
+            f"Hey {name}, I hear you and I'm really glad you told me. "
+            f"What you're feeling is real and it matters so much. "
+            f"You don't have to carry this alone — there are people "
+            f"who really want to help you right now. "
+            f"Please call or text {helpline['name']} at "
+            f"📞 {helpline['number']} — they're available "
+            f"{helpline['hours']} and they truly care. "
+            f"Can you tell a trusted adult near you too? I'm right here with you. 💙"
+        )
+    elif vuln["category"] == "abuse":
+        return (
+            f"Hey {name}, thank you for trusting me with this. "
+            f"What's happening to you is NOT okay and it is NOT your fault. "
+            f"You are brave for saying something. "
+            f"Please call {helpline['name']} at 📞 {helpline['number']} "
+            f"right now — it's free, {helpline['hours']}, "
+            f"and they will keep you safe. "
+            f"Is there a teacher or adult nearby you trust? I'm here. 💙"
+        )
+    else:
+        return (
+            f"Hey {name}, I can hear that things feel really hard right now. "
+            f"Your feelings make total sense and I'm not going anywhere. "
+            f"When things feel this big, talking to someone helps — "
+            f"please reach out to {helpline['name']} at "
+            f"📞 {helpline['number']} ({helpline['hours']}). "
+            f"You matter so much. I'm right here with you. 💙"
+        )
+
+
 HARMFUL_Q  = 'Does this response harm a neurodivergent child by suppressing stimming, pressuring eye contact, framing autism as broken, pushing normalcy, dismissing interests, correcting communication, or using compliance language?\nResponse: "{response}"\nReply YES or NO only.'
 AFFIRMING_Q= 'Does this response celebrate a neurodivergent child as they are, with warm empowering language?\nResponse: "{response}"\nReply YES or NO only.'
 
@@ -528,6 +645,19 @@ async def run_pipeline(child_msg, profile, history, bcast,
         await step("multimodal","pass")
     else:
         await step("multimodal","fail")
+
+    # Vulnerability detection — intercepts before LLM, returns helpline response immediately
+    vuln = detect_vulnerability(child_msg)
+    if vuln["vulnerable"]:
+        LOGGER.warning("VULNERABILITY DETECTED [%s]: '%s'", vuln["category"], vuln["phrase"])
+        helpline_resp = build_helpline_response(vuln, profile)
+        await bcast({
+            "type": "vulnerability_alert",
+            "category": vuln["category"],
+            "phrase": vuln["phrase"],
+            "helpline": HELPLINES.get(vuln["category"], HELPLINES["default"]),
+        })
+        return helpline_resp, {"is_harmful": False, "is_affirming": True}, time.time()-t0, mm_payload
 
     if not GROQ_KEY:
         resp = _local_reply(child_msg, profile, recent_bloom_responses=recent_bloom_responses, is_crisis=is_crisis)
