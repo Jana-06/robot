@@ -203,9 +203,6 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:12px 2
 @keyframes spin{to{transform:rotate(360deg)}}
 .c-ttl{font-family:'Syne',sans-serif;font-size:17px;font-weight:700}
 .c-sub{font-size:12px;color:var(--t2);max-width:360px;line-height:1.65}
-.c-code{font-size:11px;color:var(--teal);background:var(--bg2);padding:5px 14px;border-radius:8px;border:1px solid var(--bd);font-family:'DM Mono',monospace;margin-top:4px}
-.c-try{margin-top:8px;font-size:11px;padding:8px 18px;border-radius:8px;background:var(--bloom);border:none;color:#fff;cursor:pointer;font-family:'DM Mono',monospace;transition:.15s}
-.c-try:hover{background:var(--bloom-l)}
 
 /* ═══ ROBOT FACE ══════════════════════════════════════════════════════ */
 .robot-sec{background:linear-gradient(180deg,rgba(123,94,167,.08),transparent);border-bottom:1px solid var(--bd)}
@@ -263,11 +260,7 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:12px 2
 <div class="cov" id="cov">
   <div class="csp"></div>
   <div class="c-ttl">Connecting to BLOOM Server</div>
-  <div class="c-sub">Start the Python backend, then enter its address below.</div>
-  <code class="c-code">python bloom_server.py --child demo</code>
-  <input id="ws-url-input" style="margin-top:8px;background:var(--bg2);border:1px solid var(--bd2);border-radius:8px;padding:7px 14px;font-family:'DM Mono',monospace;font-size:12px;color:var(--t0);width:320px;max-width:90vw;outline:none;text-align:center" placeholder="ws://localhost:8765" />
-  <div style="font-size:10px;color:var(--t3);margin-top:2px">Remote server? Use wss://your-host:8765</div>
-  <button class="c-try" onclick="applyWsUrl()">Connect</button>
+  <div class="c-sub">Please wait…</div>
 </div>
 
 <nav>
@@ -507,39 +500,8 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:12px 2
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script>
-// ── WS URL — reads from ?server= param, localStorage, or defaults to localhost ──
-function _defaultWsUrl(){
-  if(window.location.protocol==='file:') return 'ws://localhost:8765';
-  const host=window.location.hostname||'localhost';
-  const scheme=(window.location.protocol==='https:')?'wss':'ws';
-  return `${scheme}://${host}:8765`;
-}
-function _isLocalWsUrl(url){
-  return /^(ws|wss):\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(url||'');
-}
-function _resolveWsUrl(){
-  const p=new URLSearchParams(window.location.search).get('server');
-  if(p){localStorage.setItem('bloom_ws_url',p);return p;}
-  const stored=localStorage.getItem('bloom_ws_url');
-  const def=_defaultWsUrl();
-  if(!stored) return def;
-  if(window.location.protocol!=='file:' && _isLocalWsUrl(stored) && !_isLocalWsUrl(def)) return def;
-  return stored;
-}
-let _wsUrl=_resolveWsUrl();
-
-function applyWsUrl(){
-  const inp=document.getElementById('ws-url-input');
-  const val=(inp&&inp.value.trim())||_defaultWsUrl();
-  _wsUrl=val; localStorage.setItem('bloom_ws_url',val);
-  initWS();
-}
-
-// Pre-fill the input with the current URL
-window.addEventListener('DOMContentLoaded',()=>{
-  const inp=document.getElementById('ws-url-input');
-  if(inp && !inp.value) inp.value=_wsUrl;
-});
+// ── WS URL ──────────────────────────────────────────────────────────────────
+const _wsUrl='wss://bloom-backend-bioj.onrender.com';
 
 // ── WS ───────────────────────────────────────────────────────────────────
 let ws=null, profile=null;
@@ -593,7 +555,7 @@ function enableLocalMode(reason){
   if(_wsRetryTimer){ clearTimeout(_wsRetryTimer); _wsRetryTimer=null; }
   setWS("local");
   const overlay=document.getElementById("cov");
-  if(overlay) overlay.classList.remove("h");
+  if(overlay) overlay.classList.add("h");
   const lbl=document.getElementById("wslbl");
   if(lbl) lbl.textContent=reason ? `Local demo · ${reason}` : "Local demo mode";
   const hint=document.getElementById("chat-ttl");
@@ -634,7 +596,7 @@ function initWS(){
 function setWS(s){
   const d=document.getElementById("wsd"),l=document.getElementById("wslbl");
   d.className="ws-dot"+(s==="on"?" on":s==="err"?" err":s==="local"?" on":"");
-  l.textContent={on:"Live · ws:8765",off:"Reconnecting…",connecting:"Connecting…",err:"Error",local:"Local demo"}[s]||s;
+  l.textContent={on:"Live",off:"Reconnecting…",connecting:"Connecting…",err:"Error",local:"Local demo"}[s]||s;
 }
 function send(obj){ if(ws&&ws.readyState===1){ ws.send(JSON.stringify(obj)); return true; } return false; }
 
