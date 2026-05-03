@@ -708,7 +708,7 @@ function onFrame(m){
   fpsCnt++; const now=Date.now(); if(now-fpsT>1000){ document.getElementById("cam-fps").textContent=fpsCnt+"fps"; fpsCnt=0; fpsT=now; }
   // ── NEW: update robot face + frustration tracker ────────────────────
   const _ctr={happy:'excited',sad:'caring',angry:'encouraging',fear:'caring',neutral:'friendly',uncertain:'thinking',afraid:'caring'};
-  if(robotFace){ const _re=_ctr[m.emotion]||'friendly'; robotFace.setExpression(_re); setRobotLabel(_re); }
+  if(robotFace&&(!robotFace._manualLock||Date.now()>robotFace._manualLock)){ const _re=_ctr[m.emotion]||'friendly'; robotFace.setExpression(_re); setRobotLabel(_re); }
   if(robotFace && m.eye_gaze) robotFace.setGaze(m.eye_gaze);
   FrustrationTracker.update(m.emotion||'neutral');
 }
@@ -741,7 +741,7 @@ function onGStep(m){
   if(m.status==="running") showTy(TLBL[m.step]||"Processing…");
   else if(m.step==="tts"&&m.status==="pass") hideTy();
   // ── NEW: thinking face while LLM runs ────────────────────────────────
-  if(robotFace){ if(m.step==="llm"&&m.status==="running"){ robotFace.setExpression('thinking'); setRobotLabel('thinking'); } }
+  if(robotFace&&(!robotFace._manualLock||Date.now()>robotFace._manualLock)){ if(m.step==="llm"&&m.status==="running"){ robotFace.setExpression('thinking'); setRobotLabel('thinking'); } }
 }
 
 // ── MESSAGES ─────────────────────────────────────────────────────────────
@@ -769,8 +769,10 @@ function onBloom(m){
   if(robotFace){
     // Don't override robot expression if vulnerability overlay is active
     if(!document.getElementById('vuln-ov')?.classList.contains('show')){
-      const _re=m.is_stim?'excited':m.is_affirming?'encouraging':'friendly';
-      robotFace.setExpression(_re); setRobotLabel(_re);
+      if(!robotFace._manualLock||Date.now()>robotFace._manualLock){
+        const _re=m.is_stim?'excited':m.is_affirming?'encouraging':'friendly';
+        robotFace.setExpression(_re); setRobotLabel(_re);
+      }
     }
     if(typeof m.engagement_score==='number') robotFace.setEngagement(m.engagement_score);
     if(m.stim_phase) robotFace.setStimPhase(m.stim_phase); else robotFace.setStimPhase('none');
@@ -1218,11 +1220,11 @@ class RobotFace {
     this._camera.position.set(0, 0.35, 6.0);
     this._camera.lookAt(0, 0.15, 0);
 
-    // Lights
-    this._scene.add(new THREE.AmbientLight(0x554466, 1.1));
-    this._key  = new THREE.PointLight(0xAA77FF, 2.4, 18);  this._key.position.set(2.5,3.5,3.5);
-    this._fill = new THREE.PointLight(0x00DDBB, 1.2, 15);  this._fill.position.set(-2,1.5,2.5);
-    this._rim  = new THREE.PointLight(0x7B5EA7, 0.8, 12);  this._rim.position.set(0,2,-2);
+    // Lights — PBR-quality setup
+    this._scene.add(new THREE.HemisphereLight(0x8899BB, 0x332211, 0.65));
+    this._key  = new THREE.DirectionalLight(0xCCDDFF, 3.6);  this._key.position.set(2.5,4,3.5);
+    this._fill = new THREE.PointLight(0xFF8833, 2.0, 24);    this._fill.position.set(-3,0.5,2.5);
+    this._rim  = new THREE.PointLight(0x0066FF, 2.6, 18);    this._rim.position.set(0.5,3,-3);
     this._scene.add(this._key); this._scene.add(this._fill); this._scene.add(this._rim);
 
     // State
@@ -1231,6 +1233,7 @@ class RobotFace {
     this.eyeGaze = 'center';
     this.engagementScore = 50;
     this.stimPhase = 'none';
+    this._manualLock = 0;
     this._t = 0;
     this._talkPh = 0;
     this._blinkT = 0; this._blinkInt = 3.8;
@@ -1247,17 +1250,18 @@ class RobotFace {
   setEngagement(s) { this.engagementScore = Number(s) || 50; }
   setStimPhase(p)  { this.stimPhase = p || 'none'; }
 
-  _m(color, shine=70, emit=0x000000, emitI=0) {
-    return new THREE.MeshPhongMaterial({ color, shininess:shine, specular:0x443355, emissive:emit, emissiveIntensity:emitI });
+  _m(color, met=0.88, rough=0.20) {
+    return new THREE.MeshStandardMaterial({ color, metalness:met, roughness:rough });
   }
   _bm(color) { return new THREE.MeshBasicMaterial({ color }); }
 
   _buildRobot() {
-    const C = { body:0x7B5EA7, dark:0x241F34, accent:0x2EC4B6, light:0xA98FCC, panel:0x1C1829, white:0xF0EEFF, gold:0xFFCC44 };
-    const bodyM  = this._m(C.body,  90);
-    const darkM  = this._m(C.dark,  50);
-    const lightM = this._m(C.light,100);
-    const panelM = this._m(C.panel,140);
+    const C = { steel:0x38404E, chrome:0x9AAFC0, dark:0x0D1018, panel:0x181C24, blue:0x00C4FF, orange:0xFF5500, gold:0xF0A820, white:0xDDEEFF, red:0xFF2200 };
+    const steelM  = this._m(C.steel,  0.90, 0.18);
+    const chromeM = this._m(C.chrome, 0.96, 0.06);
+    const darkM   = this._m(C.dark,   0.60, 0.45);
+    const panelM  = this._m(C.panel,  0.50, 0.38);
+    const goldM   = this._m(C.gold,   0.75, 0.14);
 
     this._root = new THREE.Group();
     this._scene.add(this._root);
@@ -1266,137 +1270,202 @@ class RobotFace {
     this._torso = new THREE.Group();
     this._root.add(this._torso);
 
-    this._torso.add(new THREE.Mesh(new THREE.BoxGeometry(1.05,1.25,0.62), bodyM));
-
-    const chestPanel = new THREE.Mesh(new THREE.BoxGeometry(0.62,0.58,0.04), panelM);
-    chestPanel.position.set(0,0.12,0.33);
-    this._torso.add(chestPanel);
-
-    this._chestOrb = new THREE.Mesh(new THREE.SphereGeometry(0.115,20,20), this._bm(C.accent));
-    this._chestOrb.position.set(0,0.17,0.36);
-    this._torso.add(this._chestOrb);
-
-    this._chestRing = new THREE.Mesh(new THREE.TorusGeometry(0.15,0.017,8,32), this._bm(C.accent));
-    this._chestRing.position.set(0,0.17,0.355);
-    this._torso.add(this._chestRing);
-
+    // Main chest body
+    this._torso.add(new THREE.Mesh(new THREE.BoxGeometry(1.10,1.28,0.64), steelM));
+    // Upper chest armor plate
+    const uPlate = new THREE.Mesh(new THREE.BoxGeometry(0.92,0.52,0.07), chromeM);
+    uPlate.position.set(0,0.34,0.35); this._torso.add(uPlate);
+    // Lower chest armor plate
+    const lPlate = new THREE.Mesh(new THREE.BoxGeometry(0.84,0.40,0.07), chromeM);
+    lPlate.position.set(0,-0.12,0.35); this._torso.add(lPlate);
+    // Panel recess
+    const cPanel = new THREE.Mesh(new THREE.BoxGeometry(0.54,0.50,0.04), panelM);
+    cPanel.position.set(0,0.14,0.35); this._torso.add(cPanel);
+    // Arc reactor core (glowing blue)
+    this._chestOrb = new THREE.Mesh(new THREE.SphereGeometry(0.108,20,20), this._bm(C.blue));
+    this._chestOrb.position.set(0,0.18,0.38); this._torso.add(this._chestOrb);
+    this._chestRing = new THREE.Mesh(new THREE.TorusGeometry(0.155,0.019,8,36), this._bm(C.blue));
+    this._chestRing.position.set(0,0.18,0.375); this._torso.add(this._chestRing);
+    // Status bar LEDs
     this._leds = [];
     for (let i=-1;i<=1;i++) {
-      const led = new THREE.Mesh(new THREE.SphereGeometry(0.036,8,8), this._bm(C.gold));
-      led.position.set(i*0.155,-0.17,0.36);
-      this._torso.add(led); this._leds.push(led);
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.055,0.022,0.015), this._bm(C.orange));
+      led.position.set(i*0.155,-0.16,0.38); this._torso.add(led); this._leds.push(led);
     }
-    for (const sx of [-1,1]) {  // shoulder pads
-      const sh = new THREE.Mesh(new THREE.BoxGeometry(0.2,0.22,0.68), lightM);
-      sh.position.set(sx*0.625,0.42,0); this._torso.add(sh);
+    // Shoulder pauldrons
+    for (const sx of [-1,1]) {
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(0.24,0.30,0.76), steelM);
+      pad.position.set(sx*0.66,0.45,0); this._torso.add(pad);
+      const padFace = new THREE.Mesh(new THREE.BoxGeometry(0.20,0.24,0.07), chromeM);
+      padFace.position.set(sx*0.66,0.45,0.41); this._torso.add(padFace);
+    }
+    // Waist narrowing
+    const waist = new THREE.Mesh(new THREE.BoxGeometry(0.80,0.20,0.52), darkM);
+    waist.position.set(0,-0.72,0); this._torso.add(waist);
+    // Vent slits on sides
+    for (const sx of [-1,1]) {
+      for (let i=0;i<3;i++) {
+        const vent = new THREE.Mesh(new THREE.BoxGeometry(0.015,0.055,0.38), this._bm(0x001122));
+        vent.position.set(sx*0.56,-0.20+i*0.09,0); this._torso.add(vent);
+      }
     }
 
     // ── ARMS ──────────────────────────────────────────────────────────
-    this._lArm = this._makeArm(C, bodyM, lightM); this._lArm.position.set(-0.72,0.38,0);
-    this._rArm = this._makeArm(C, bodyM, lightM); this._rArm.position.set( 0.72,0.38,0);
+    this._lArm = this._makeArm(C, steelM, chromeM, goldM); this._lArm.position.set(-0.76,0.38,0);
+    this._rArm = this._makeArm(C, steelM, chromeM, goldM); this._rArm.position.set( 0.76,0.38,0);
     this._root.add(this._lArm); this._root.add(this._rArm);
 
     // ── LEGS ──────────────────────────────────────────────────────────
-    this._lLeg = this._makeLeg(C, bodyM, darkM); this._lLeg.position.set(-0.26,-0.84,0);
-    this._rLeg = this._makeLeg(C, bodyM, darkM); this._rLeg.position.set( 0.26,-0.84,0);
+    this._lLeg = this._makeLeg(C, steelM, chromeM, darkM); this._lLeg.position.set(-0.28,-0.88,0);
+    this._rLeg = this._makeLeg(C, steelM, chromeM, darkM); this._rLeg.position.set( 0.28,-0.88,0);
     this._root.add(this._lLeg); this._root.add(this._rLeg);
 
     // ── HEAD ──────────────────────────────────────────────────────────
     this._head = new THREE.Group();
-    this._head.position.set(0,0.94,0);
+    this._head.position.set(0,0.96,0);
     this._root.add(this._head);
 
-    // Neck
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.17,0.22,0.26,12), darkM);
-    neck.position.set(0,-0.13,0); this._head.add(neck);
+    // Neck cylinder
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.165,0.215,0.26,14), darkM);
+    neck.position.set(0,-0.12,0); this._head.add(neck);
 
-    // Skull
-    const skull = new THREE.Mesh(new THREE.BoxGeometry(1.02,0.92,0.82), bodyM);
-    skull.position.set(0,0.2,0); this._head.add(skull);
-
-    // Brow bars (animated per expression)
-    this._bL = new THREE.Mesh(new THREE.BoxGeometry(0.37,0.07,0.05), darkM);
-    this._bR = new THREE.Mesh(new THREE.BoxGeometry(0.37,0.07,0.05), darkM);
-    this._bL.position.set(-0.22,0.57,0.43); this._head.add(this._bL);
-    this._bR.position.set( 0.22,0.57,0.43); this._head.add(this._bR);
-
-    for (const sx of [-1,1]) {   // ears
-      const ear = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.28,0.2), darkM);
-      ear.position.set(sx*0.58,0.18,0); this._head.add(ear);
-      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.04,8,8), this._bm(C.accent));
-      dot.position.set(sx*0.59,0.22,0.1); this._head.add(dot);
-    }
-
-    // ── EYES ──────────────────────────────────────────────────────────
-    this._eyes = [];
-    for (const ex of [-0.24, 0.24]) {
-      const eg = new THREE.Group();
-      eg.position.set(ex,0.23,0.43); this._head.add(eg);
-
-      const sock=new THREE.Mesh(new THREE.CircleGeometry(0.2,32),this._bm(0x040210)); sock.position.z=0.001; eg.add(sock);
-      const iris=new THREE.Mesh(new THREE.CircleGeometry(0.155,32),this._bm(C.accent)); iris.position.z=0.002; eg.add(iris);
-      const pupil=new THREE.Mesh(new THREE.CircleGeometry(0.072,20),this._bm(0x030110)); pupil.position.z=0.003; eg.add(pupil);
-      const shine=new THREE.Mesh(new THREE.CircleGeometry(0.037,12),this._bm(0xFFFFFF));
-      shine.position.set(-0.055,0.055,0.004); eg.add(shine);
-      // Eyelid (scales Y to blink)
-      const lid=new THREE.Mesh(new THREE.CircleGeometry(0.21,32),this._bm(0x7B5EA7));
-      lid.position.z=0.005; lid.scale.y=0; eg.add(lid);
-
-      this._eyes.push({g:eg, iris, pupil, lid});
-    }
-
-    // ── MOUTH ─────────────────────────────────────────────────────────
-    this._mouthG = new THREE.Group();
-    this._mouthG.position.set(0,-0.1,0.43); this._head.add(this._mouthG);
-
-    const slot=new THREE.Mesh(new THREE.BoxGeometry(0.52,0.14,0.01),this._bm(0x020108));
-    this._mouthG.add(slot);
-
-    const uLip=new THREE.Mesh(new THREE.BoxGeometry(0.52,0.055,0.04),this._m(C.body,80));
-    uLip.position.set(0,0.095,0.022); this._mouthG.add(uLip);
-
-    this._jaw = new THREE.Group(); this._jaw.position.set(0,-0.07,0.01); this._mouthG.add(this._jaw);
-    const lLip=new THREE.Mesh(new THREE.BoxGeometry(0.52,0.055,0.04),this._m(C.body,80));
-    lLip.position.set(0,-0.048,0.012); this._jaw.add(lLip);
-    for (let i=-2;i<=2;i++) {
-      const t=new THREE.Mesh(new THREE.BoxGeometry(0.082,0.05,0.025),this._bm(C.white));
-      t.position.set(i*0.088,0.008,0.025); this._jaw.add(t);
-    }
+    // Main skull helmet
+    const skull = new THREE.Mesh(new THREE.BoxGeometry(0.96,0.86,0.78), steelM);
+    skull.position.set(0,0.18,0); this._head.add(skull);
+    // Forehead chrome plate
+    const fore = new THREE.Mesh(new THREE.BoxGeometry(0.82,0.28,0.08), chromeM);
+    fore.position.set(0,0.52,0.41); this._head.add(fore);
+    // Cheek plates
     for (const sx of [-1,1]) {
-      const dot=new THREE.Mesh(new THREE.SphereGeometry(0.038,8,8),this._bm(C.accent));
-      dot.position.set(sx*0.28,0,0.01); this._mouthG.add(dot);
+      const cheek = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.40,0.70), chromeM);
+      cheek.position.set(sx*0.52,0.16,0.02); this._head.add(cheek);
     }
+    // Chin plate
+    const chin = new THREE.Mesh(new THREE.BoxGeometry(0.74,0.18,0.09), chromeM);
+    chin.position.set(0,-0.15,0.41); this._head.add(chin);
+    // Side sensor discs
+    for (const sx of [-1,1]) {
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.065,0.065,0.04,14), this._m(C.dark,0.4,0.6));
+      disc.rotation.z = Math.PI/2; disc.position.set(sx*0.51,0.30,0.04); this._head.add(disc);
+      const glow = new THREE.Mesh(new THREE.CircleGeometry(0.045,14), this._bm(C.blue));
+      glow.rotation.y = sx * -Math.PI/2; glow.position.set(sx*0.535,0.30,0.04); this._head.add(glow);
+    }
+
+    // Brow ridges (gold trim, animated)
+    this._bL = new THREE.Mesh(new THREE.BoxGeometry(0.32,0.055,0.07), goldM);
+    this._bR = new THREE.Mesh(new THREE.BoxGeometry(0.32,0.055,0.07), goldM);
+    this._bL.position.set(-0.185,0.455,0.42); this._head.add(this._bL);
+    this._bR.position.set( 0.185,0.455,0.42); this._head.add(this._bR);
+
+    // ── EYES — rectangular visor slits (movie style) ───────────────────
+    this._eyes = [];
+    for (const ex of [-0.215, 0.215]) {
+      const eg = new THREE.Group();
+      eg.position.set(ex, 0.285, 0.425); this._head.add(eg);
+      // Socket recess
+      const sock = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.10,0.05), panelM);
+      sock.position.z = -0.01; eg.add(sock);
+      // Main iris glow slit
+      const iris = new THREE.Mesh(new THREE.BoxGeometry(0.24,0.062,0.01), this._bm(C.blue));
+      iris.position.z = 0.022; eg.add(iris);
+      // Bright center core
+      const pupil = new THREE.Mesh(new THREE.BoxGeometry(0.10,0.034,0.01), this._bm(0xFFFFFF));
+      pupil.position.z = 0.030; eg.add(pupil);
+      // Eyelid armor plate (slides down to blink)
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.31,0.105,0.016), steelM);
+      lid.position.z = 0.036; lid.scale.y = 0; eg.add(lid);
+      this._eyes.push({ g:eg, iris, pupil, lid });
+    }
+
+    // ── MOUTH GRILLE ──────────────────────────────────────────────────
+    this._mouthG = new THREE.Group();
+    this._mouthG.position.set(0, 0.04, 0.425); this._head.add(this._mouthG);
+    // Dark backing plate
+    this._mouthG.add(new THREE.Mesh(new THREE.BoxGeometry(0.58,0.20,0.03), panelM));
+    // Horizontal grille bars (glow when talking)
+    this._mouthBars = [];
+    for (let i=0;i<4;i++) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.50,0.024,0.025), this._bm(0x003344));
+      bar.position.set(0,-0.064+i*0.043,0.012); this._mouthG.add(bar); this._mouthBars.push(bar);
+    }
+    // Jaw lower plate (rotates open when talking)
+    this._jaw = new THREE.Group(); this._jaw.position.set(0,-0.10,0); this._mouthG.add(this._jaw);
+    const jawPlate = new THREE.Mesh(new THREE.BoxGeometry(0.58,0.085,0.075), steelM);
+    jawPlate.position.set(0,-0.042,-0.006); this._jaw.add(jawPlate);
+    const jawTrim = new THREE.Mesh(new THREE.BoxGeometry(0.52,0.025,0.04), chromeM);
+    jawTrim.position.set(0,-0.084,0.015); this._jaw.add(jawTrim);
 
     // ── ANTENNA ───────────────────────────────────────────────────────
-    this._ant = new THREE.Group(); this._ant.position.set(0.16,0.65,0); this._head.add(this._ant);
-    const antStick=new THREE.Mesh(new THREE.CylinderGeometry(0.025,0.03,0.42,8),lightM);
-    antStick.position.y=0.21; this._ant.add(antStick);
-    this._antBall=new THREE.Mesh(new THREE.SphereGeometry(0.075,16,16),this._bm(C.gold));
-    this._antBall.position.y=0.45; this._ant.add(this._antBall);
+    this._ant = new THREE.Group(); this._ant.position.set(0,0.66,0); this._head.add(this._ant);
+    const antBase = new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.042,0.09,10), chromeM);
+    antBase.position.y=0.045; this._ant.add(antBase);
+    const antStick = new THREE.Mesh(new THREE.CylinderGeometry(0.016,0.022,0.34,10), steelM);
+    antStick.position.y=0.23; this._ant.add(antStick);
+    this._antBall = new THREE.Mesh(new THREE.SphereGeometry(0.055,14,14), this._bm(C.orange));
+    this._antBall.position.y=0.42; this._ant.add(this._antBall);
 
-    this._root.position.set(0,0.18,0);
-    this._root.rotation.y=0.12;
+    this._root.position.set(0,0.16,0);
+    this._root.rotation.y=0.10;
   }
 
-  _makeArm(C, bodyM, lightM) {
-    const g=new THREE.Group();
-    const upper=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.55,0.26),bodyM); upper.position.y=-0.275; g.add(upper);
-    const elbow=new THREE.Mesh(new THREE.SphereGeometry(0.115,12,12),lightM); elbow.position.y=-0.55; g.add(elbow);
-    const fg=new THREE.Group(); fg.position.y=-0.55; g.add(fg);
-    const fore=new THREE.Mesh(new THREE.BoxGeometry(0.22,0.5,0.22),bodyM); fore.position.y=-0.25; fg.add(fore);
-    const wrist=new THREE.Mesh(new THREE.TorusGeometry(0.112,0.024,8,20),this._bm(C.accent));
-    wrist.rotation.x=Math.PI/2; wrist.position.y=-0.5; fg.add(wrist);
-    const hand=new THREE.Mesh(new THREE.SphereGeometry(0.112,14,14),lightM); hand.position.y=-0.62; fg.add(hand);
+  _makeArm(C, steelM, chromeM, goldM) {
+    const g = new THREE.Group();
+    // Shoulder ball joint
+    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.155,14,14), chromeM);
+    g.add(shoulder);
+    // Upper arm
+    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.27,0.54,0.27), steelM);
+    upper.position.y=-0.27; g.add(upper);
+    const uFace = new THREE.Mesh(new THREE.BoxGeometry(0.20,0.40,0.05), chromeM);
+    uFace.position.set(0,-0.27,0.16); g.add(uFace);
+    // Elbow sphere joint
+    const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.115,12,12), chromeM);
+    elbow.position.y=-0.56; g.add(elbow);
+    // Forearm group
+    const fg = new THREE.Group(); fg.position.y=-0.56; g.add(fg);
+    const fore = new THREE.Mesh(new THREE.BoxGeometry(0.24,0.46,0.24), steelM);
+    fore.position.y=-0.23; fg.add(fore);
+    const fFace = new THREE.Mesh(new THREE.BoxGeometry(0.18,0.34,0.05), chromeM);
+    fFace.position.set(0,-0.23,0.145); fg.add(fFace);
+    // Wrist ring
+    const wrist = new THREE.Mesh(new THREE.CylinderGeometry(0.105,0.115,0.065,12), chromeM);
+    wrist.position.y=-0.50; fg.add(wrist);
+    // Gauntlet
+    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.24,0.18,0.22), steelM);
+    hand.position.y=-0.62; fg.add(hand);
+    // Gold knuckle strip
+    const knuck = new THREE.Mesh(new THREE.BoxGeometry(0.22,0.022,0.025), this._m(C.gold,0.75,0.14));
+    knuck.position.set(0,-0.59,0.115); fg.add(knuck);
     g._fg=fg;
     return g;
   }
 
-  _makeLeg(C, bodyM, darkM) {
-    const g=new THREE.Group();
-    const thigh=new THREE.Mesh(new THREE.BoxGeometry(0.32,0.65,0.32),darkM); thigh.position.y=-0.325; g.add(thigh);
-    const knee=new THREE.Mesh(new THREE.SphereGeometry(0.115,12,12),bodyM); knee.position.y=-0.66; g.add(knee);
-    const shin=new THREE.Mesh(new THREE.BoxGeometry(0.28,0.5,0.28),darkM); shin.position.y=-0.975; g.add(shin);
-    const foot=new THREE.Mesh(new THREE.BoxGeometry(0.38,0.14,0.52),bodyM); foot.position.set(0,-1.29,0.1); g.add(foot);
+  _makeLeg(C, steelM, chromeM, darkM) {
+    const g = new THREE.Group();
+    // Hip joint
+    const hip = new THREE.Mesh(new THREE.SphereGeometry(0.148,12,12), chromeM);
+    g.add(hip);
+    // Thigh
+    const thigh = new THREE.Mesh(new THREE.BoxGeometry(0.34,0.64,0.34), steelM);
+    thigh.position.y=-0.34; g.add(thigh);
+    const tFace = new THREE.Mesh(new THREE.BoxGeometry(0.26,0.48,0.055), chromeM);
+    tFace.position.set(0,-0.34,0.20); g.add(tFace);
+    // Knee joint
+    const knee = new THREE.Mesh(new THREE.SphereGeometry(0.124,12,12), chromeM);
+    knee.position.y=-0.70; g.add(knee);
+    // Shin
+    const shin = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.52,0.30), steelM);
+    shin.position.y=-1.00; g.add(shin);
+    const sFace = new THREE.Mesh(new THREE.BoxGeometry(0.22,0.38,0.06), chromeM);
+    sFace.position.set(0,-1.00,0.18); g.add(sFace);
+    // Ankle joint
+    const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.09,10,10), chromeM);
+    ankle.position.y=-1.28; g.add(ankle);
+    // Boot
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.36,0.14,0.55), steelM);
+    foot.position.set(0,-1.38,0.09); g.add(foot);
+    const toe = new THREE.Mesh(new THREE.BoxGeometry(0.30,0.095,0.13), chromeM);
+    toe.position.set(0,-1.385,0.37); g.add(toe);
     return g;
   }
 
@@ -1508,20 +1577,31 @@ class RobotFace {
     }
 
     // EYE COLOR
-    const eCols={happy:0x44FF88,excited:0xFFCC00,sad:0x6688EE,angry:0xFF3333,thinking:0xCC88FF,
-                 caring:0xFF88BB,encouraging:0x44FF99,friendly:0x00D4FF,calm:0x00BBEE,surprised:0xFFFF44,scared:0xAADDFF};
-    const ec=eCols[expr]||0x00D4FF;
-    for (const eye of this._eyes) eye.iris.material.color.setHex(ec);
-    this._key.intensity=2.4*(0.72+Math.sin(t*(talk?8:1.8))*0.28);
+    const eCols={happy:0x44FF88,excited:0xFFDD00,sad:0x4488FF,angry:0xFF2200,thinking:0xBB66FF,
+                 caring:0xFF66AA,encouraging:0x00FF99,friendly:0x00C4FF,calm:0x00AAEE,surprised:0xFFFF33,scared:0x88CCFF};
+    const ec=eCols[expr]||0x00C4FF;
+    for (const eye of this._eyes) {
+      eye.iris.material.color.setHex(ec);
+      eye.pupil.material.color.setHex(isAngry?0xFF4400:0xFFFFFF);
+    }
+    this._key.intensity=3.6*(0.75+Math.sin(t*(talk?8:1.8))*0.25);
+
+    // MOUTH BARS — glow + pulse when talking
+    if (this._mouthBars) {
+      this._mouthBars.forEach((bar,i)=>{
+        const v=talk?Math.max(0,Math.sin(this._talkPh+i*0.8)):0;
+        bar.material.color.setHex(v>0.25?ec:0x002233);
+      });
+    }
 
     // CHEST ORB
-    const oCols={happy:0x44FF88,excited:0xFFCC00,sad:0x3366FF,angry:0xFF2200,thinking:0xAA55FF,
-                 caring:0xFF66AA,encouraging:0x33FF99,friendly:0x2EC4B6,calm:0x00CCEE};
+    const oCols={happy:0x44FF88,excited:0xFFDD00,sad:0x2255FF,angry:0xFF2200,thinking:0xAA44FF,
+                 caring:0xFF55AA,encouraging:0x22FF88,friendly:0x00C4FF,calm:0x00AADD};
     if (isStim) {
-      this._chestOrb.material.color.setHSL((t*55%360)/360,1,0.58);
-      this._chestRing.material.color.setHSL(((t*55+30)%360)/360,1,0.62);
+      this._chestOrb.material.color.setHSL((t*50%360)/360,1,0.58);
+      this._chestRing.material.color.setHSL(((t*50+40)%360)/360,1,0.62);
     } else {
-      const oc=oCols[expr]||0x2EC4B6;
+      const oc=oCols[expr]||0x00C4FF;
       this._chestOrb.material.color.setHex(oc); this._chestRing.material.color.setHex(oc);
     }
     const orbP=0.88+Math.sin(t*(talk?9:1.4)*Math.PI*2)*0.14;
@@ -1529,13 +1609,13 @@ class RobotFace {
     this._chestRing.rotation.z=t*(isExcited?2.5:0.8);
 
     // LEDs
-    const lc=isExcited?0xFFCC00:(talk?0x00FFEE:0x44EE88);
-    this._leds.forEach((led,i)=>{ led.material.color.setHex(Math.sin(t*3.2+i*1.4)>0.15?lc:0x111018); });
+    const lc=isAngry?0xFF2200:(isExcited?0xFFDD00:(talk?0x00FFEE:0x00C4FF));
+    this._leds.forEach((led,i)=>{ led.material.color.setHex(Math.sin(t*3.2+i*1.4)>0.1?lc:0x0A0C10); });
 
     // ANTENNA
     const antHz=talk?5.5:(isExcited?3.5:1.5);
     this._ant.rotation.z=Math.sin(t*antHz)*(talk?0.14:0.05);
-    this._antBall.material.color.setHex(isStim?0xFF33FF:(isExcited?0xFF8800:(talk?0x00FFFF:0xFFCC44)));
+    this._antBall.material.color.setHex(isStim?0xFF00FF:(isAngry?0xFF2200:(isExcited?0xFF8800:(talk?0x00FFFF:0xFF5500))));
 
     // BODY LEAN
     const leanX=isCare?0.1:(isSad?-0.04:0);
@@ -1554,7 +1634,10 @@ function setRobotLabel(name){
 
 // Called when child manually clicks a mood button
 function setRobotExpression(name){
-  if(robotFace){ robotFace.setExpression(name); }
+  if(robotFace){
+    robotFace.setExpression(name);
+    robotFace._manualLock = Date.now() + 10000; // hold for 10 s
+  }
   setRobotLabel(name);
 }
 
